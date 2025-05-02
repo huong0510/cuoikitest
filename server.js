@@ -32,15 +32,29 @@ client.query(`
 
 // --------- ROUTES -----------
 // GET all users
-app.get('/data', (req, res) => {
-  client.query('SELECT * FROM actual_table_name', (err, result) => {
-      if (err) {
-          console.error('Error executing query', err.stack);
-          res.status(500).send('Error executing query');
-      } else {
-          res.status(200).json(result.rows);
+app.get('/data', async (req, res) => {
+  try {
+      const cacheResults = await redisClient.get('data');
+
+      if (cacheResults) {
+          return res.status(200).json(JSON.parse(cacheResults));
       }
-  });
+
+      client.query('SELECT * FROM actual_table_name', (err, result) => {
+          if (err) {
+              console.error('Error executing query', err.stack);
+              return res.status(500).send('Error executing query');
+          }
+
+          // Lưu dữ liệu vào Redis
+          redisClient.set('data', JSON.stringify(result.rows));
+
+          res.status(200).json(result.rows);
+      });
+  } catch (error) {
+      console.error('Error fetching data', error);
+      res.status(500).send('Error fetching data');
+  }
 });
 
 // CREATE user
@@ -81,7 +95,28 @@ app.delete('/data/:id', (req, res) => {
       }
   });
 });
+const redis = require('redis');
 
+const redisClient = redis.createClient({
+  url: 'rediss://red-d0adb2juibrs73bqh690:fmeSsqjIvGs40Xseowg6SaDJzJP98CDW@oregon-keyvalue.render.com:6379'
+});
+
+
+redisClient.connect()
+    .then(() => console.log('Connected to Key Value Store'))
+    .catch(err => console.error('Key Value connection error', err));
+  // Lưu trữ dữ liệu
+redisClient.set('myKey', 'myValue')
+.then(() => console.log('Value set successfully'))
+.catch(err => console.error('Error setting value', err));
+
+// Truy xuất dữ liệu
+redisClient.get('myKey')
+.then(value => console.log('Retrieved value:', value))
+.catch(err => console.error('Error retrieving value', err));
+process.on('exit', () => {
+  redisClient.quit();
+});
 app.listen(port, () => {
   console.log(`🚀 Server is running at http://localhost:${port}`);
 });
