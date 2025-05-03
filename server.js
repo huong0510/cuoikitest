@@ -23,10 +23,10 @@ client.connect()
 
 // Tạo bảng ví dụ nếu chưa có (users)
 client.query(`
-  CREATE TABLE IF NOT EXISTS users (
+  CREATE TABLE IF NOT EXISTS actual_table_name (
     id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    email TEXT UNIQUE NOT NULL
+    column1 TEXT NOT NULL,
+    column2 TEXT UNIQUE NOT NULL
   );
 `);
 
@@ -34,21 +34,24 @@ client.query(`
 // GET all users
 app.get('/data', async (req, res) => {
   try {
+      if (req.query.refresh === 'true') {
+          await redisClient.del('data');
+      }
+
       const cacheResults = await redisClient.get('data');
 
       if (cacheResults) {
           return res.status(200).json(JSON.parse(cacheResults));
       }
 
-      client.query('SELECT * FROM actual_table_name', (err, result) => {
+      client.query('SELECT * FROM users', (err, result) => {
           if (err) {
               console.error('Error executing query', err.stack);
               return res.status(500).send('Error executing query');
           }
 
-          // Lưu dữ liệu vào Redis
-          redisClient.set('data', JSON.stringify(result.rows));
-
+          // Lưu dữ liệu vào Redis trong 60 giây
+          redisClient.setEx('data', 60, JSON.stringify(result.rows));
           res.status(200).json(result.rows);
       });
   } catch (error) {
@@ -57,44 +60,61 @@ app.get('/data', async (req, res) => {
   }
 });
 
+
 // CREATE user
 app.post('/data', (req, res) => {
-  const { column1, column2 } = req.body; // Lấy dữ liệu từ body của yêu cầu
-  client.query('INSERT INTO actual_table_name (column1, column2) VALUES ($1, $2)', [column1, column2], (err, result) => {
-      if (err) {
-          console.error('Error inserting data', err.stack);
-          res.status(500).send('Error inserting data');
-      } else {
-          res.status(201).send('Data added successfully');
-      }
+  const { name, email } = req.body;
+  client.query('INSERT INTO users (name, email) VALUES ($1, $2)', [name, email], async (err, result) => {
+
+    if (err) {
+      console.error('Error inserting data', err.stack);
+      res.status(500).send('Error inserting data');
+    } else {
+      await redisClient.del('data'); // 🔥 Xoá cache
+      res.status(201).send('Data added successfully');
+    }
   });
 });
+
 // UPDATE user
 app.put('/data/:id', (req, res) => {
   const { id } = req.params; // Lấy id từ URL
-  const { column1, column2 } = req.body; // Lấy dữ liệu từ body
-  client.query('UPDATE actual_table_name SET column1 = $1, column2 = $2 WHERE id = $3', [column1, column2, id], (err, result) => {
-      if (err) {
+  const { name, email } = req.body;
+  // Lấy dữ liệu từ body
+
+  // Cập nhật dữ liệu trong PostgreSQL
+  client.query('UPDATE users SET name = $1, email = $2 WHERE id = $3', [name, email, id], async (err, result) => {
+    if (err) {
           console.error('Error updating data', err.stack);
-          res.status(500).send('Error updating data');
+          return res.status(500).send('Error updating data');
       } else {
-          res.status(200).send('Data updated successfully');
+          // Sau khi cập nhật dữ liệu, xóa cache Redis để đảm bảo dữ liệu mới được truy xuất
+          await redisClient.del('data'); // Xóa cache dữ liệu cũ
+          console.log('Cache deleted after update');
+          return res.status(200).send('Data updated successfully');
       }
   });
 });
 
-// DELETE user
+
+/// DELETE user
 app.delete('/data/:id', (req, res) => {
   const { id } = req.params; // Lấy id từ URL
-  client.query('DELETE FROM actual_table_name WHERE id = $1', [id], (err, result) => {
-      if (err) {
+
+  // Xóa dữ liệu khỏi PostgreSQL
+  client.query('DELETE FROM users WHERE id = $1', [id], async (err, result) => {
+    if (err) {
           console.error('Error deleting data', err.stack);
-          res.status(500).send('Error deleting data');
+          return res.status(500).send('Error deleting data');
       } else {
-          res.status(200).send('Data deleted successfully');
+          // Sau khi xóa dữ liệu, xóa cache Redis
+          await redisClient.del('data'); // Xóa cache dữ liệu cũ
+          console.log('Cache deleted after delete');
+          return res.status(200).send('Data deleted successfully');
       }
   });
 });
+
 const redis = require('redis');
 
 const redisClient = redis.createClient({
